@@ -19,8 +19,8 @@ The codebase is currently structured as:
 * environments/ -- the extended environments
 * utils/ -- wrapper classes for logging and standardized evaluations
 
-Questions can be directed to the Real-World RL group e-mail
-[realworldrl@google.com].
+Questions can be directed to the Real-World RL group e-mail:
+[realworldrl@google.com]
 
 ## Challenges
 
@@ -89,3 +89,20 @@ state space.
   mkdir /tmp/rwrl/
   python3 run_ppo.py
   ```
+
+If you use `realworldrl_suite` in your work, please cite:
+
+```bash
+@article{dulacarnold2020realworldrl,
+         title={An empirical investigation of the challenges of real-world reinforcement learning},
+         author={Dulac-Arnold, Gabriel and
+                 Levine, Nir and
+                 Mankowitz, Daniel J. and
+                 Li, Jerry and
+                 Paduraru, Cosmin and
+                 Gowal, Sven and
+                 Hester, Todd
+                 },
+         year={2020},
+}
+```
