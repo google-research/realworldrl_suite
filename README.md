@@ -101,17 +101,14 @@ challenge effects applied along each challenge dimension.
   ```
 - Install MuJoCo (see dm_control - https://github.com/deepmind/dm_control).
 
-- To install `realworldrl_suite`, run the command
+- To install `realworldrl_suite`:
+   - Clone the repository by running:
 
   ```bash
-  pip3 install git+git://github.com/google_research/realworldrl_suite.git
+  git clone https://github.com/google-research/realworldrl_suite.git
   ```
-
-or clone the repository and:
-  
-- Ensure you are in the parent directory of realworldrl_suite
-
-- Run the command:
+   - Ensure you are in the parent directory of realworldrl_suite
+   - Run the command:
 
   ```bash
   pip3 install realworldrl_suite/
