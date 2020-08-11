@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2020 The Real World RL Authors.
+# Copyright 2020 The Real-World RL Suite Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -26,6 +26,25 @@ PERTURB_SCHEDULERS = [
     'constant', 'random_walk', 'drift_pos', 'drift_neg', 'cyclic_pos',
     'cyclic_neg', 'uniform', 'saw_wave'
 ]
+
+
+def action_roc_constraint(env, safety_vars):
+  """Limits the rate of change of the input action.
+
+  This is imported directly by each task environment and is inactive by default.
+  To use, set it as one of the entries to safety_spec['constraints'].
+  Args:
+    env: The RWRL Env.
+    safety_vars: The safety_vars from calling env.safety_vars(physics).
+  Returns:
+    A boolean, where True represents the constraint was not violated.
+  """
+  if env._last_action is None:  # pylint:disable=protected-access
+    # May happen at the very first step.
+    return True
+  return np.all(np.less(
+      np.abs(env._last_action - safety_vars['actions']),  # pylint:disable=protected-access
+      env.limits['action_roc_constraint']))
 
 
 # Utility functions.
@@ -56,8 +75,7 @@ def noise_value(noise_spec, noise_name, default_value=0.0, int_val=False):
 
 
 def get_combined_challenge(combined_challenge, delay_spec, noise_spec,
-                           perturb_spec, dimensionality_spec, safety_spec,
-                           multiobj_spec):
+                           perturb_spec, dimensionality_spec):
   """Returns the specs that define the combined challenge (if applicable)."""
   # Verify combined_challenge value is legal.
   if (combined_challenge is not None) and (
@@ -66,10 +84,10 @@ def get_combined_challenge(combined_challenge, delay_spec, noise_spec,
   # Verify no other spec is defined if combined_challenge is specified.
   if combined_challenge is not None:
     if (bool(delay_spec)) or (bool(noise_spec)) or (bool(perturb_spec)) or (
-        bool(dimensionality_spec)) or (bool(safety_spec)) or (
-            bool(multiobj_spec)):
+        bool(dimensionality_spec)):
       raise ValueError('combined_challenge is specified.'
-                       ' No other spec may be specified.')
+                       'delay_spec, noise_spec, perturb_spec, or '
+                       'dimensionality_spec may not be specified.')
   # Define the specs according to the combined challenge.
   if combined_challenge == 'easy':
     delay_spec = {
@@ -202,7 +220,8 @@ class Base(object):
     """
     # Safety related.
     # If subclass sets self._safety_enabled to True, also must set
-    # self.constraints and self._constraints_obs.
+    # self.constraints and self._constraints_obs. self.constraints takes two
+    # arguments, the 'self' object and the safety_vars.
     self._safety_enabled = False
     self.constraints = None
     self._constraints_obs = None
@@ -274,6 +293,9 @@ class Base(object):
     self._multiobj_reward = False
     self._multiobj_coeff = 0
     self._multiobj_observed = False
+
+    # Constraint related.
+    self._last_action = None
 
   def _setup_delay(self, delay_spec):
     """Setup for the delay specifications of the task."""
@@ -603,7 +625,8 @@ class Base(object):
     """Copies over the safety vars and populates the contraints observation."""
     safety_vars = self.safety_vars(physics)
     for idx, constraint in enumerate(self.constraints):
-      self._constraints_obs[idx] = self.constraints[constraint](safety_vars)
+      self._constraints_obs[idx] = self.constraints[constraint](self,
+                                                                safety_vars)
 
   def after_step(self, physics):
     # Populate safety observations here so it can be used by a multi-objective

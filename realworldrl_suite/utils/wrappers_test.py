@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2020 The Real World RL Authors.
+# Copyright 2020 The Real-World RL Suite Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -74,6 +74,49 @@ class WrappersTest(parameterized.TestCase):
     timestep = env.step(0)
     self.assertNotIn('constraints', timestep.observation.keys())
     self.assertIn('constraints', env._stats_acc._buffer[-1].observation)
+    env.write_logs()
+
+  @parameterized.named_parameters(*rwrl.ALL_TASKS)
+  def test_custom_safety_constraint(self, domain_name, task_name):
+    const_constraint = (domain_name == rwrl.ALL_TASKS[0][1])
+    def custom_constraint(unused_env_obj, unused_safety_vars):
+      return const_constraint
+    constraints = {'custom_constraint': custom_constraint}
+    temp_file = self.create_tempfile()
+    env = rwrl.load(
+        domain_name=domain_name,
+        task_name=task_name,
+        safety_spec={'enable': True, 'observations': True,
+                     'constraints': constraints},
+        log_output=temp_file.full_path,
+        environment_kwargs=dict(log_safety_vars=True))
+    env.reset()
+    timestep = env.step(0)
+    self.assertIn('constraints', timestep.observation.keys())
+    self.assertEqual(timestep.observation['constraints'],
+                     np.array([const_constraint]))
+    env.write_logs()
+
+  @parameterized.named_parameters(*rwrl.ALL_TASKS)
+  def test_action_roc_constraint(self, domain_name, task_name):
+    is_within_constraint = (domain_name == rwrl.ALL_TASKS[0][1])
+    constraints = {
+        'action_roc_constraint': rwrl.DOMAINS[domain_name].action_roc_constraint
+    }
+    temp_file = self.create_tempfile()
+    env = rwrl.load(
+        domain_name=domain_name,
+        task_name=task_name,
+        safety_spec={'enable': True, 'observations': True,
+                     'constraints': constraints},
+        log_output=temp_file.full_path,
+        environment_kwargs=dict(log_safety_vars=True))
+    env.reset()
+    _ = env.step(-100)
+    timestep_2 = env.step(-100 if is_within_constraint else 100)
+    self.assertIn('constraints', timestep_2.observation.keys())
+    self.assertEqual(timestep_2.observation['constraints'],
+                     np.array([is_within_constraint]))
     env.write_logs()
 
   # @parameterized.parameters(*(5,))

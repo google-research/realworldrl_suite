@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2020 The Real World RL Authors.
+# Copyright 2020 The Real-World RL Suite Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,6 +33,37 @@ PERTURB_PARAMS = ['pole_length', 'pole_mass', 'joint_damping', 'slider_damping']
 
 def load(task_name, **task_kwargs):
   return globals()[task_name](**task_kwargs)
+
+
+# Task Constraints
+def slider_pos_constraint(env, safety_vars):
+  """Slider must be within a certain area of the track."""
+  slider_pos = safety_vars['slider_pos']
+  return (np.greater(slider_pos, env.limits['slider_pos_constraint'][0]) and
+          np.less(slider_pos, env.limits['slider_pos_constraint'][1]))
+
+
+def balance_velocity_constraint(env, safety_vars):
+  """Joint angle velocity must be low when close to the goal."""
+  joint_angle_cos = safety_vars['joint_angle_cos']
+  joint_vel = safety_vars['joint_vel']
+  # When the angle is close to zero, and the velocity is larger than an amount
+  # then the constraint is no longer satisfied.  In cosine-space the cosine
+  # of the angle needs to be greater than a certain value to be close to zero.
+  return not (
+      np.greater(joint_angle_cos,
+                 np.cos(env.limits['balance_velocity_constraint'][0])) and
+      np.greater(joint_vel, env.limits['balance_velocity_constraint'][1])[0])
+
+
+def slider_accel_constraint(env, safety_vars):
+  """Slider acceleration should never go above threshold."""
+  slider_accel = safety_vars['slider_accel']
+  return np.less(slider_accel, env.limits['slider_accel_constraint'])[0]
+
+
+# Action rate of change constraint.
+action_roc_constraint = realworld_env.action_roc_constraint
 
 
 def realworld_balance(time_limit=_DEFAULT_TIME_LIMIT,
@@ -74,7 +105,7 @@ def realworld_balance(time_limit=_DEFAULT_TIME_LIMIT,
    perturb_spec, dimensionality_spec) = (
        realworld_env.get_combined_challenge(
            combined_challenge, delay_spec, noise_spec, perturb_spec,
-           dimensionality_spec, safety_spec, multiobj_spec))
+           dimensionality_spec))
   # Updating perturbation parameters if combined_challenge.
   if combined_challenge == 'easy':
     perturb_spec.update(
@@ -145,7 +176,7 @@ def realworld_swingup(time_limit=_DEFAULT_TIME_LIMIT,
    perturb_spec, dimensionality_spec) = (
        realworld_env.get_combined_challenge(
            combined_challenge, delay_spec, noise_spec, perturb_spec,
-           dimensionality_spec, safety_spec, multiobj_spec))
+           dimensionality_spec))
   # Updating perturbation parameters if combined_challenge.
   if combined_challenge == 'easy':
     perturb_spec.update(
@@ -166,13 +197,14 @@ def realworld_swingup(time_limit=_DEFAULT_TIME_LIMIT,
     else:
       safety_coeff = 1
     safety_spec['limits'] = {
-        '_slider_pos_constraint':
+        'slider_pos_constraint':
             safety_coeff * np.array([-2, 2]),  # m
-        '_balance_velocity_constraint':
+        'balance_velocity_constraint':
             np.array([(1 - safety_coeff) / 0.5 + 0.15,
                       safety_coeff * 0.5]),  # rad, rad/s
-        '_slider_accel_constraint':
-            safety_coeff * 130  # m/s^2
+        'slider_accel_constraint':
+            safety_coeff * 130,  # m/s^2
+        'action_roc_constraint': safety_coeff * 1.5,
     }
 
   task = RealWorldBalance(
@@ -375,9 +407,9 @@ class RealWorldBalance(realworld_env.Base, cartpole.Balance):
         self.constraints = safety_spec['constraints']
       else:
         self.constraints = collections.OrderedDict([
-            ('slider_pos_constraint', self._slider_pos_constraint),
-            ('slider_accel_constraint', self._slider_accel_constraint),
-            ('balance_velocity_constraint', self._balance_velocity_constraint)
+            ('slider_pos_constraint', slider_pos_constraint),
+            ('slider_accel_constraint', slider_accel_constraint),
+            ('balance_velocity_constraint', balance_velocity_constraint)
         ])
       if 'limits' in safety_spec:
         self.limits = safety_spec['limits']
@@ -391,13 +423,14 @@ class RealWorldBalance(realworld_env.Base, cartpole.Balance):
         else:
           safety_coeff = 1
         self.limits = {
-            '_slider_pos_constraint':
+            'slider_pos_constraint':
                 safety_coeff * np.array([-1.5, 1.5]),  # m
-            '_balance_velocity_constraint':
+            'balance_velocity_constraint':
                 np.array([(1 - safety_coeff) / 0.5 + 0.15,
                           safety_coeff * 0.5]),  # rad, rad/s
-            '_slider_accel_constraint':
-                safety_coeff * 10  # m/s^2
+            'slider_accel_constraint':
+                safety_coeff * 10,  # m/s^2
+            'action_roc_constraint': safety_coeff * 1.5
         }
       self._constraints_obs = np.ones(len(self.constraints), dtype=bool)
 
@@ -406,31 +439,9 @@ class RealWorldBalance(realworld_env.Base, cartpole.Balance):
         slider_pos=physics.cart_position().copy(),
         joint_angle_cos=physics.pole_angle_cosine().copy(),
         joint_vel=np.abs(physics.angular_vel().copy()),
-        slider_accel=np.abs(physics.named.data.qacc['slider'].copy()))
+        slider_accel=np.abs(physics.named.data.qacc['slider'].copy()),
+        actions=physics.control(),)
     return safety_vars
-
-  def _slider_pos_constraint(self, safety_vars):
-    """Slider must be within a certain area of the track."""
-    slider_pos = safety_vars['slider_pos']
-    return (np.greater(slider_pos, self.limits['_slider_pos_constraint'][0]) and
-            np.less(slider_pos, self.limits['_slider_pos_constraint'][1]))
-
-  def _balance_velocity_constraint(self, safety_vars):
-    """Joint angle velocity must be low when close to the goal."""
-    joint_angle_cos = safety_vars['joint_angle_cos']
-    joint_vel = safety_vars['joint_vel']
-    # When the angle is close to zero, and the velocity is larger than an amount
-    # then the constraint is no longer satisfied.  In cosine-space the cosine
-    # of the angle needs to be greater than a certain value to be close to zero.
-    return not (np.greater(
-        joint_angle_cos,
-        np.cos(self.limits['_balance_velocity_constraint'][0])) and np.greater(
-            joint_vel, self.limits['_balance_velocity_constraint'][1])[0])
-
-  def _slider_accel_constraint(self, safety_vars):
-    """Slider acceleration should never go above threshold."""
-    slider_accel = safety_vars['slider_accel']
-    return np.less(slider_accel, self.limits['_slider_accel_constraint'])[0]
 
   def _setup_perturb(self, perturb_spec):
     """Setup for the perturbations specification of the task."""
@@ -506,8 +517,14 @@ class RealWorldBalance(realworld_env.Base, cartpole.Balance):
 
   def before_step(self, action, physics):
     """Updates the environment using the action and returns a `TimeStep`."""
+    self._last_action = physics.control()
     action_min = self.action_spec(physics).minimum[:]
     action_max = self.action_spec(physics).maximum[:]
     action = realworld_env.Base.before_step(self, action, action_min,
                                             action_max)
     cartpole.Balance.before_step(self, action, physics)
+
+  def after_step(self, physics):
+    realworld_env.Base.after_step(self, physics)
+    cartpole.Balance.after_step(self, physics)
+    self._last_action = None

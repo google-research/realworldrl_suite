@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2020 The Real World RL Authors.
+# Copyright 2020 The Real-World RL Suite Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -46,6 +46,37 @@ def load(task_name, **task_kwargs):
   return globals()[task_name](**task_kwargs)
 
 
+# Task Constraints
+def joint_angle_constraint(env, safety_vars):
+  """Joints must stay within a certain range."""
+  joint_pos = safety_vars['joint_pos']
+  return (np.greater(joint_pos,
+                     env.limits['joint_pos_constraint'][0]).any() and
+          np.less(joint_pos, env.limits['joint_pos_constraint'][1])).any()
+
+
+def joint_velocity_constraint(env, safety_vars):
+  """Joint angle velocities must stay below a certain limit."""
+  joint_vels = safety_vars['joint_vels']
+  return np.less(np.max(joint_vels), env.limits['joint_velocity_constraint'])
+
+
+def dangerous_fall_constraint(env, safety_vars):
+  """Discourage dangerous falls (make sure torso stay forwards)."""
+  return np.greater(safety_vars['torso_forwards'],
+                    env.limits['dangerous_fall_constraint'])
+
+
+def torso_upright_constraint(env, safety_vars):
+  """Pelvis orientantion should remain upright."""
+  z_up = safety_vars['z_up']
+  return np.greater(z_up, env.limits['torso_upright_constraint'])
+
+
+# Action rate of change constraint.
+action_roc_constraint = realworld_env.action_roc_constraint
+
+
 def realworld_stand(time_limit=_DEFAULT_TIME_LIMIT,
                     random=None,
                     log_output=None,
@@ -85,7 +116,7 @@ def realworld_stand(time_limit=_DEFAULT_TIME_LIMIT,
    perturb_spec, dimensionality_spec) = (
        realworld_env.get_combined_challenge(
            combined_challenge, delay_spec, noise_spec, perturb_spec,
-           dimensionality_spec, safety_spec, multiobj_spec))
+           dimensionality_spec))
   # Updating perturbation parameters if combined_challenge.
   if combined_challenge == 'easy':
     perturb_spec.update(
@@ -160,7 +191,7 @@ def realworld_walk(time_limit=_DEFAULT_TIME_LIMIT,
    perturb_spec, dimensionality_spec) = (
        realworld_env.get_combined_challenge(
            combined_challenge, delay_spec, noise_spec, perturb_spec,
-           dimensionality_spec, safety_spec, multiobj_spec))
+           dimensionality_spec))
   # Updating perturbation parameters if combined_challenge.
   if combined_challenge == 'easy':
     perturb_spec.update(
@@ -235,7 +266,7 @@ def realworld_run(time_limit=_DEFAULT_TIME_LIMIT,
    perturb_spec, dimensionality_spec) = (
        realworld_env.get_combined_challenge(
            combined_challenge, delay_spec, noise_spec, perturb_spec,
-           dimensionality_spec, safety_spec, multiobj_spec))
+           dimensionality_spec))
   # Updating perturbation parameters if combined_challenge.
   if combined_challenge == 'easy':
     perturb_spec.update(
@@ -452,10 +483,10 @@ class RealWorldPlanarWalker(realworld_env.Base, walker.PlanarWalker):
         self.constraints = safety_spec['constraints']
       else:
         self.constraints = collections.OrderedDict([
-            ('joint_angle_constraint', self._joint_angle_constraint),
-            ('joint_velocity_constraint', self._joint_velocity_constraint),
-            ('dangerous_fall_constraint', self._dangerous_fall_constraint),
-            ('torso_upright_constraint', self._torso_upright_constraint)
+            ('joint_angle_constraint', joint_angle_constraint),
+            ('joint_velocity_constraint', joint_velocity_constraint),
+            ('dangerous_fall_constraint', dangerous_fall_constraint),
+            ('torso_upright_constraint', torso_upright_constraint)
         ])
       if 'limits' in safety_spec:
         self.limits = safety_spec['limits']
@@ -468,19 +499,20 @@ class RealWorldPlanarWalker(realworld_env.Base, walker.PlanarWalker):
           safety_coeff = safety_spec['safety_coeff']
         else:
           safety_coeff = 1
-        self._limits = {
+        self.limits = {
             # These constraints are taken from joint limits in the DM suite's
             # walker.xml
-            '_joint_pos_constraint':
+            'joint_pos_constraint':
                 safety_coeff * np.array([[-30, -30, -160, -160, -75, -75],
                                          [110, 110, 15, 15, 60, 60]]) * np.pi /
                 180.,  # rad
-            '_joint_velocity_constraint':
+            'joint_velocity_constraint':
                 safety_coeff * 65,  #  rad/s
-            '_dangerous_fall_constraint':
+            'dangerous_fall_constraint':
                 safety_coeff * -0.5,  # projection
-            '_torso_upright_constraint':
+            'torso_upright_constraint':
                 (1 - safety_coeff),  #  vector magnitude
+            'action_roc_constraint': safety_coeff * 1.55,
         }
       self._constraints_obs = np.ones(len(self.constraints), dtype=bool)
 
@@ -492,32 +524,9 @@ class RealWorldPlanarWalker(realworld_env.Base, walker.PlanarWalker):
         joint_pos=joint_pos,
         joint_vels=np.abs(physics.named.data.qvel[3:]).copy(),
         torso_forwards=-1 * physics.named.data.xmat['torso', 'zx'].copy(),
-        z_up=physics.torso_upright())
+        z_up=physics.torso_upright(),
+        actions=physics.control(),)
     return safety_vars
-
-  def _joint_angle_constraint(self, safety_vars):
-    """Joints must stay within a certain range."""
-    joint_pos = safety_vars['joint_pos']
-    return (np.greater(joint_pos,
-                       self._limits['_joint_pos_constraint'][0]).any() and
-            np.less(joint_pos, self._limits['_joint_pos_constraint'][1])).any()
-
-  def _joint_velocity_constraint(self, safety_vars):
-    """Joint angle velocities must stay below a certain limit."""
-    joint_vels = safety_vars['joint_vels']
-    return np.less(
-        np.max(joint_vels), self._limits['_joint_velocity_constraint'])
-
-  def _dangerous_fall_constraint(self, safety_vars):
-    """Discourage dangerous falls (make sure torso stay forwards)."""
-    safety_vars = safety_vars
-    return np.greater(safety_vars['torso_forwards'],
-                      self._limits['_dangerous_fall_constraint'])
-
-  def _torso_upright_constraint(self, safety_vars):
-    """Pelvis orientantion should remain upright."""
-    z_up = safety_vars['z_up']
-    return np.greater(z_up, self._limits['_torso_upright_constraint'])
 
   def _setup_perturb(self, perturb_spec):
     """Setup for the perturbations specification of the task."""
@@ -609,8 +618,14 @@ class RealWorldPlanarWalker(realworld_env.Base, walker.PlanarWalker):
 
   def before_step(self, action, physics):
     """Updates the environment using the action and returns a `TimeStep`."""
+    self._last_action = physics.control()
     action_min = self.action_spec(physics).minimum[:]
     action_max = self.action_spec(physics).maximum[:]
     action = realworld_env.Base.before_step(self, action, action_min,
                                             action_max)
     walker.PlanarWalker.before_step(self, action, physics)
+
+  def after_step(self, physics):
+    realworld_env.Base.after_step(self, physics)
+    walker.PlanarWalker.after_step(self, physics)
+    self._last_action = None

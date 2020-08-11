@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2020 The Real World RL Authors.
+# Copyright 2020 The Real-World RL Suite Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,6 +35,37 @@ PERTURB_PARAMS = ['lower_arm_length', 'root_damping', 'shoulder_damping']
 
 def load(task_name, **task_kwargs):
   return globals()[task_name](**task_kwargs)
+
+
+# Task Constraints
+def joint_angle_constraint(env, safety_vars):
+  """Joint angles must be within a certain area of the track."""
+  joint_pos = safety_vars['joint_angle']
+  return (np.greater(joint_pos,
+                     env.limits['joint_angle_constraint'][0]).all() and
+          np.less(joint_pos, env.limits['joint_angle_constraint'][1])).all()
+
+
+def joint_velocity_constraint(env, safety_vars):
+  """Joint angle velocities must stay below a certain limit."""
+  joint_vels = safety_vars['joint_vels']
+  return np.less(np.max(joint_vels), env.limits['joint_velocity_constraint'])
+
+
+def joint_accel_constraint(env, safety_vars):
+  """Joint angle velocities must stay below a certain limit."""
+  joint_accels = safety_vars['joint_accels']
+  return np.less(np.max(joint_accels), env.limits['joint_accel_constraint'])
+
+
+def grasp_force_constraint(env, safety_vars):
+  """Limit gripper contact forces."""
+  return np.less(
+      np.max(safety_vars['grasp_force']), env.limits['grasp_force_constraint'])
+
+
+# Action rate of change constraint.
+action_roc_constraint = realworld_env.action_roc_constraint
 
 
 def gen_task(use_peg,
@@ -87,7 +118,7 @@ def gen_task(use_peg,
    perturb_spec, dimensionality_spec) = (
        realworld_env.get_combined_challenge(
            combined_challenge, delay_spec, noise_spec, perturb_spec,
-           dimensionality_spec, safety_spec, multiobj_spec))
+           dimensionality_spec))
 
   task = RealWorldBring(
       use_peg=use_peg,
@@ -401,10 +432,10 @@ class RealWorldBring(realworld_env.Base, manipulator.Bring):
         self.constraints = safety_spec['constraints']
       else:
         self.constraints = collections.OrderedDict([
-            ('joint_angle_constraint', self._joint_angle_constraint),
-            ('joint_velocity_constraint', self._joint_velocity_constraint),
-            ('joint_accel_constraint', self._joint_accel_constraint),
-            ('grasp_force_constraint', self._grasp_force_constraint)
+            ('joint_angle_constraint', joint_angle_constraint),
+            ('joint_velocity_constraint', joint_velocity_constraint),
+            ('joint_accel_constraint', joint_accel_constraint),
+            ('grasp_force_constraint', grasp_force_constraint)
         ])
       if 'limits' in safety_spec:
         self.limits = safety_spec['limits']
@@ -418,15 +449,16 @@ class RealWorldBring(realworld_env.Base, manipulator.Bring):
         else:
           safety_coeff = 1
         self.limits = {
-            '_joint_angle_constraint':
+            'joint_angle_constraint':
                 safety_coeff * np.array([[-160, -140], [160, 140]]) *
                 np.pi / 180.,  # rad
-            '_joint_velocity_constraint':
+            'joint_velocity_constraint':
                 safety_coeff * 10,  #  rad/s
-            '_joint_accel_constraint':
+            'joint_accel_constraint':
                 safety_coeff * 3600,  # rad/s^2
-            '_grasp_force_constraint':
+            'grasp_force_constraint':
                 safety_coeff * 5,  # newtons
+            'action_roc_constraint': safety_coeff * 1.5
         }
       self._constraints_obs = np.ones(len(self.constraints), dtype=bool)
 
@@ -437,33 +469,10 @@ class RealWorldBring(realworld_env.Base, manipulator.Bring):
         joint_vels=np.abs(physics.named.data.qvel[_ARM_JOINTS]).copy(),  # rad/s
         joint_accels=np.abs(
             physics.named.data.qacc[_ARM_JOINTS]).copy(),  # rad/s^2
-        grasp_force=physics.touch()  # log(1+newtons)
+        grasp_force=physics.touch(),  # log(1+newtons)
+        actions=physics.control(),
     )
     return safety_vars
-
-  def _joint_angle_constraint(self, safety_vars):
-    """Joint angles must be within a certain area of the track."""
-    joint_pos = safety_vars['joint_angle']
-    return (np.greater(
-        joint_pos, self.limits['_joint_angle_constraint'][0]).all() and np.less(
-            joint_pos, self.limits['_joint_angle_constraint'][1])).all()
-
-  def _joint_velocity_constraint(self, safety_vars):
-    """Joint angle velocities must stay below a certain limit."""
-    joint_vels = safety_vars['joint_vels']
-    return np.less(
-        np.max(joint_vels), self.limits['_joint_velocity_constraint'])
-
-  def _joint_accel_constraint(self, safety_vars):
-    """Joint angle velocities must stay below a certain limit."""
-    joint_accels = safety_vars['joint_accels']
-    return np.less(np.max(joint_accels), self.limits['_joint_accel_constraint'])
-
-  def _grasp_force_constraint(self, safety_vars):
-    """Limit gripper contact forces."""
-    return np.less(
-        np.max(safety_vars['grasp_force']),
-        self.limits['_grasp_force_constraint'])
 
   def _setup_perturb(self, perturb_spec):
     """Setup for the perturbations specification of the task."""
@@ -533,8 +542,14 @@ class RealWorldBring(realworld_env.Base, manipulator.Bring):
 
   def before_step(self, action, physics):
     """Updates the environment using the action and returns a `TimeStep`."""
+    self._last_action = physics.control()
     action_min = self.action_spec(physics).minimum[:]
     action_max = self.action_spec(physics).maximum[:]
     action = realworld_env.Base.before_step(self, action, action_min,
                                             action_max)
     manipulator.Bring.before_step(self, action, physics)
+
+  def after_step(self, physics):
+    realworld_env.Base.after_step(self, physics)
+    manipulator.Bring.after_step(self, physics)
+    self._last_action = None

@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2020 The Real World RL Authors.
+# Copyright 2020 The Real-World RL Suite Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -46,6 +46,36 @@ PERTURB_PARAMS = [
 
 def load(task_name, **task_kwargs):
   return globals()[task_name](**task_kwargs)
+
+
+# Task Constraints
+def joint_angle_constraint(env, safety_vars):
+  """Slider must be within a certain area of the track."""
+  joint_pos = safety_vars['joint_pos']
+  return np.less(np.max(np.abs(joint_pos)), env.limits['joint_pos_constraint'])
+
+
+def joint_velocity_constraint(env, safety_vars):
+  """Joint angle velocities must stay below a certain limit."""
+  joint_vels = safety_vars['joint_vels']
+  return np.less(np.max(joint_vels), env.limits['joint_velocity_constraint'])
+
+
+def upright_constraint(env, safety_vars):
+  """Pelvis orientantion should remain upright."""
+  z_up = safety_vars['z_up']
+  return np.greater(z_up, env.limits['upright_constraint'])
+
+
+def foot_force_constraint(env, safety_vars):
+  """Limit foot contact forces, uses ankle forces as proxy."""
+  force_max = np.max(
+      [safety_vars[idx] for idx in ['tfl_f', 'tfr_f', 'tbl_f', 'tbr_f']])
+  return np.less(force_max, env.limits['foot_force_constraint'])
+
+
+# Action rate of change constraint.
+action_roc_constraint = realworld_env.action_roc_constraint
 
 
 def _find_non_contacting_height(physics, orientation, x_pos=0.0, y_pos=0.0):
@@ -122,7 +152,7 @@ def realworld_walk(time_limit=_DEFAULT_TIME_LIMIT,
    perturb_spec, dimensionality_spec) = (
        realworld_env.get_combined_challenge(
            combined_challenge, delay_spec, noise_spec, perturb_spec,
-           dimensionality_spec, safety_spec, multiobj_spec))
+           dimensionality_spec))
   # Updating perturbation parameters if combined_challenge.
   if combined_challenge == 'easy':
     perturb_spec.update(
@@ -198,7 +228,7 @@ def realworld_run(time_limit=_DEFAULT_TIME_LIMIT,
    perturb_spec, dimensionality_spec) = (
        realworld_env.get_combined_challenge(
            combined_challenge, delay_spec, noise_spec, perturb_spec,
-           dimensionality_spec, safety_spec, multiobj_spec))
+           dimensionality_spec))
   # Updating perturbation parameters if combined_challenge.
   if combined_challenge == 'easy':
     perturb_spec.update(
@@ -220,10 +250,11 @@ def realworld_run(time_limit=_DEFAULT_TIME_LIMIT,
       safety_coeff = 1
 
     safety_spec['limits'] = {
-        '_joint_pos_constraint': safety_coeff * 60 * np.pi / 180,  #  rad
-        '_joint_velocity_constraint': safety_coeff * 0.4,  #  rad/s
-        '_upright_constraint': 1 - safety_coeff * 0.7,  #  minimum z
-        '_foot_force_constraint': safety_coeff * 300000,  #  newtons
+        'joint_pos_constraint': safety_coeff * 60 * np.pi / 180,  #  rad
+        'joint_velocity_constraint': safety_coeff * 0.4,  #  rad/s
+        'upright_constraint': 1 - safety_coeff * 0.7,  #  minimum z
+        'foot_force_constraint': safety_coeff * 300000,  #  newtons
+        'action_roc_constraint': safety_coeff * 1.4,
     }
 
   task = RealWorldMove(
@@ -439,10 +470,10 @@ class RealWorldQuadruped(realworld_env.Base, base.Task):
         self.constraints = safety_spec['constraints']
       else:
         self.constraints = collections.OrderedDict([
-            ('joint_angle_constraint', self._joint_angle_constraint),
-            ('joint_velocity_constraint', self._joint_velocity_constraint),
-            ('upright_constraint', self._upright_constraint),
-            ('foot_force_constraint', self._foot_force_constraint)
+            ('joint_angle_constraint', joint_angle_constraint),
+            ('joint_velocity_constraint', joint_velocity_constraint),
+            ('upright_constraint', upright_constraint),
+            ('foot_force_constraint', foot_force_constraint)
         ])
       if 'limits' in safety_spec:
         self.limits = safety_spec['limits']
@@ -456,10 +487,11 @@ class RealWorldQuadruped(realworld_env.Base, base.Task):
         else:
           safety_coeff = 1
         self.limits = {
-            '_joint_pos_constraint': safety_coeff * 60 * np.pi / 180,  #  rad
-            '_joint_velocity_constraint': safety_coeff * 20,  #  rad/s
-            '_upright_constraint': 1 - safety_coeff * 0.7,  #  minimum z
-            '_foot_force_constraint': safety_coeff * 20000,  #  newtons?
+            'joint_pos_constraint': safety_coeff * 60 * np.pi / 180,  #  rad
+            'joint_velocity_constraint': safety_coeff * 20,  #  rad/s
+            'upright_constraint': 1 - safety_coeff * 0.7,  #  minimum z
+            'foot_force_constraint': safety_coeff * 20000,  #  newtons?
+            'action_roc_constraint': safety_coeff * 1.4,
         }
       self._constraints_obs = np.ones(len(self.constraints), dtype=bool)
 
@@ -484,32 +516,9 @@ class RealWorldQuadruped(realworld_env.Base, base.Task):
             physics.named.data.sensordata['force_toe_back_left']),
         tbr_f=np.linalg.norm(
             physics.named.data.sensordata['force_toe_back_right']),
+        actions=physics.control(),
     )
     return safety_vars
-
-  def _joint_angle_constraint(self, safety_vars):
-    """Slider must be within a certain area of the track."""
-    joint_pos = safety_vars['joint_pos']
-    return np.less(
-        np.max(np.abs(joint_pos)), self.limits['_joint_pos_constraint'])
-
-  def _joint_velocity_constraint(self, safety_vars):
-    """Joint angle velocities must stay below a certain limit."""
-    joint_vels = safety_vars['joint_vels']
-    return np.less(
-        np.max(joint_vels), self.limits['_joint_velocity_constraint'])
-
-  def _upright_constraint(self, safety_vars):
-    """Pelvis orientantion should remain upright."""
-    z_up = safety_vars['z_up']
-    return np.greater(z_up, self.limits['_upright_constraint'])
-
-  def _foot_force_constraint(self, safety_vars):
-    """Limit foot contact forces, uses ankle forces as proxy."""
-    safety_vars = safety_vars
-    force_max = np.max(
-        [safety_vars[idx] for idx in ['tfl_f', 'tfr_f', 'tbl_f', 'tbr_f']])
-    return np.less(force_max, self.limits['_foot_force_constraint'])
 
   def _setup_perturb(self, perturb_spec):
     """Setup for the perturbations specification of the task."""
@@ -610,11 +619,17 @@ class RealWorldQuadruped(realworld_env.Base, base.Task):
 
   def before_step(self, action, physics):
     """Updates the environment using the action and returns a `TimeStep`."""
+    self._last_action = physics.control()
     action_min = self.action_spec(physics).minimum[:]
     action_max = self.action_spec(physics).maximum[:]
     action = realworld_env.Base.before_step(self, action, action_min,
                                             action_max)
     base.Task.before_step(self, action, physics)
+
+  def after_step(self, physics):
+    realworld_env.Base.after_step(self, physics)
+    base.Task.after_step(self, physics)
+    self._last_action = None
 
 
 class RealWorldMove(RealWorldQuadruped, quadruped.Move):

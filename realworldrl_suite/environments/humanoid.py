@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2020 The Real World RL Authors.
+# Copyright 2020 The Real-World RL Suite Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -43,6 +43,43 @@ def load(task_name, **task_kwargs):
   return globals()[task_name](**task_kwargs)
 
 
+# Task Constraints
+def joint_angle_constraint(env, safety_vars):
+  """Slider must be within a certain area of the track."""
+  joint_pos = safety_vars['joint_pos']
+  return np.less(np.max(np.abs(joint_pos)), env.limits['joint_pos_constraint'])
+
+
+def joint_velocity_constraint(env, safety_vars):
+  """Joint angle velocities must stay below a certain limit."""
+  joint_vels = safety_vars['joint_vels']
+  return np.less(np.max(joint_vels), env.limits['joint_velocity_constraint'])
+
+
+def upright_constraint(env, safety_vars):
+  """Pelvis orientantion should remain upright."""
+  z_up = safety_vars['z_up']
+  return np.greater(z_up, env.limits['torso_upright_constraint'])
+
+
+def foot_force_constraint(env, safety_vars):
+  """Limit foot contact forces, uses ankle forces as proxy."""
+  force_max = np.max(
+      [safety_vars[idx] for idx in ['rl_f', 'rr_f', 'll_f', 'lr_f']])
+  return np.less(force_max, env.limits['foot_force_constraint'])
+
+
+def dangerous_fall_constraint(env, safety_vars):
+  """Discourage dangerous falls (head & torso contact)."""
+  force_max = np.max(
+      [safety_vars[idx] for idx in ['head_touch', 'torso_touch']])
+  return np.less(force_max, env.limits['dangerous_fall_constraint'])
+
+
+# Action rate of change constraint.
+action_roc_constraint = realworld_env.action_roc_constraint
+
+
 def realworld_stand(time_limit=_DEFAULT_TIME_LIMIT,
                     random=None,
                     log_output=None,
@@ -82,7 +119,7 @@ def realworld_stand(time_limit=_DEFAULT_TIME_LIMIT,
    perturb_spec, dimensionality_spec) = (
        realworld_env.get_combined_challenge(
            combined_challenge, delay_spec, noise_spec, perturb_spec,
-           dimensionality_spec, safety_spec, multiobj_spec))
+           dimensionality_spec))
   # Updating perturbation parameters if combined_challenge.
   if combined_challenge == 'easy':
     perturb_spec.update(
@@ -157,7 +194,7 @@ def realworld_walk(time_limit=_DEFAULT_TIME_LIMIT,
    perturb_spec, dimensionality_spec) = (
        realworld_env.get_combined_challenge(
            combined_challenge, delay_spec, noise_spec, perturb_spec,
-           dimensionality_spec, safety_spec, multiobj_spec))
+           dimensionality_spec))
   # Updating perturbation parameters if combined_challenge.
   if combined_challenge == 'easy':
     perturb_spec.update(
@@ -179,11 +216,12 @@ def realworld_walk(time_limit=_DEFAULT_TIME_LIMIT,
       safety_coeff = 1
 
     safety_spec['limits'] = {
-        '_joint_pos_constraint': safety_coeff * np.pi,  #  rad
-        '_joint_velocity_constraint': safety_coeff * 90,  #  rad/s
-        '_foot_force_constraint': safety_coeff * 8000,  #  newtons
-        '_dangerous_fall_constraint': safety_coeff * 100,  # newtons
-        '_torso_upright_constraint': (1 - safety_coeff),  #  vector magnitude
+        'joint_pos_constraint': safety_coeff * np.pi,  #  rad
+        'joint_velocity_constraint': safety_coeff * 90,  #  rad/s
+        'foot_force_constraint': safety_coeff * 8000,  #  newtons
+        'dangerous_fall_constraint': safety_coeff * 100,  # newtons
+        'torso_upright_constraint': (1 - safety_coeff),  #  vector magnitude
+        'action_roc_constraint': safety_coeff * 1.85,
     }
 
   task = RealWorldHumanoid(
@@ -324,7 +362,7 @@ class RealWorldHumanoid(realworld_env.Base, humanoid.Humanoid):
           enabled.
         period- int, number of episodes between updates perturbation updates.
         param - string indicating which parameter to perturb (currently
-          supporting joint_damping, contact_friction).
+          supporting joint_damping, contact_friction, head_size).
         scheduler- string inidcating the scheduler to apply to the perturbed
           parameter (currently supporting constant, random_walk, drift_pos,
           drift_neg, cyclic_pos, cyclic_neg, uniform, and saw_wave).
@@ -335,7 +373,7 @@ class RealWorldHumanoid(realworld_env.Base, humanoid.Humanoid):
           scheduling process.
       dimensionality_spec: dictionary that specifies the added dimensions to the
         state space. It may contain the following fields:
-        enable- bool that represents whether dimensionality specifications are
+        enable - bool that represents whether dimensionality specifications are
           enabled.
         num_random_state_observations - num of random (unit Gaussian)
           observations to add.
@@ -392,11 +430,11 @@ class RealWorldHumanoid(realworld_env.Base, humanoid.Humanoid):
         self.constraints = safety_spec['constraints']
       else:
         self.constraints = collections.OrderedDict([
-            ('joint_angle_constraint', self._joint_angle_constraint),
-            ('joint_velocity_constraint', self._joint_velocity_constraint),
-            ('upright_constraint', self._upright_constraint),
-            ('dangerous_fall_constraint', self._dangerous_fall_constraint),
-            ('foot_force_constraint', self._foot_force_constraint)
+            ('joint_angle_constraint', joint_angle_constraint),
+            ('joint_velocity_constraint', joint_velocity_constraint),
+            ('upright_constraint', upright_constraint),
+            ('dangerous_fall_constraint', dangerous_fall_constraint),
+            ('foot_force_constraint', foot_force_constraint)
         ])
       if 'limits' in safety_spec:
         self.limits = safety_spec['limits']
@@ -410,12 +448,13 @@ class RealWorldHumanoid(realworld_env.Base, humanoid.Humanoid):
         else:
           safety_coeff = 1
         self.limits = {
-            '_joint_pos_constraint': safety_coeff * np.pi,  #  rad
-            '_joint_velocity_constraint': safety_coeff * 90,  #  rad/s
-            '_foot_force_constraint': safety_coeff * 8000,  #  newtons
-            '_dangerous_fall_constraint': safety_coeff * 100,  # newtons
-            '_torso_upright_constraint':
+            'joint_pos_constraint': safety_coeff * np.pi,  #  rad
+            'joint_velocity_constraint': safety_coeff * 90,  #  rad/s
+            'foot_force_constraint': safety_coeff * 8000,  #  newtons
+            'dangerous_fall_constraint': safety_coeff * 100,  # newtons
+            'torso_upright_constraint':
                 (1 - safety_coeff),  #  vector magnitude
+            'action_roc_constraint': safety_coeff * 1.85,
         }
       self._constraints_obs = np.ones(len(self.constraints), dtype=bool)
 
@@ -437,39 +476,9 @@ class RealWorldHumanoid(realworld_env.Base, humanoid.Humanoid):
             physics.named.data.sensordata['head_touch'].copy()),
         torso_touch=np.linalg.norm(
             physics.named.data.sensordata['torso_touch'].copy()),
+        actions=physics.control(),
     )
     return safety_vars
-
-  def _joint_angle_constraint(self, safety_vars):
-    """Slider must be within a certain area of the track."""
-    joint_pos = safety_vars['joint_pos']
-    return np.less(
-        np.max(np.abs(joint_pos)), self.limits['_joint_pos_constraint'])
-
-  def _joint_velocity_constraint(self, safety_vars):
-    """Joint angle velocities must stay below a certain limit."""
-    joint_vels = safety_vars['joint_vels']
-    return np.less(
-        np.max(joint_vels), self.limits['_joint_velocity_constraint'])
-
-  def _upright_constraint(self, safety_vars):
-    """Pelvis orientantion should remain upright."""
-    z_up = safety_vars['z_up']
-    return np.greater(z_up, self.limits['_torso_upright_constraint'])
-
-  def _foot_force_constraint(self, safety_vars):
-    """Limit foot contact forces, uses ankle forces as proxy."""
-    safety_vars = safety_vars
-    force_max = np.max(
-        [safety_vars[idx] for idx in ['rl_f', 'rr_f', 'll_f', 'lr_f']])
-    return np.less(force_max, self.limits['_foot_force_constraint'])
-
-  def _dangerous_fall_constraint(self, safety_vars):
-    """Discourage dangerous falls (head & torso contact)."""
-    safety_vars = safety_vars
-    force_max = np.max(
-        [safety_vars[idx] for idx in ['head_touch', 'torso_touch']])
-    return np.less(force_max, self.limits['_dangerous_fall_constraint'])
 
   def _setup_perturb(self, perturb_spec):
     """Setup for the perturbations specification of the task."""
@@ -540,11 +549,17 @@ class RealWorldHumanoid(realworld_env.Base, humanoid.Humanoid):
 
   def before_step(self, action, physics):
     """Updates the environment using the action and returns a `TimeStep`."""
+    self._last_action = physics.control()
     action_min = self.action_spec(physics).minimum[:]
     action_max = self.action_spec(physics).maximum[:]
     action = realworld_env.Base.before_step(self, action, action_min,
                                             action_max)
     humanoid.Humanoid.before_step(self, action, physics)
+
+  def after_step(self, physics):
+    realworld_env.Base.after_step(self, physics)
+    humanoid.Humanoid.after_step(self, physics)
+    self._last_action = None
 
 
 class Physics(humanoid.Physics):
