@@ -1,7 +1,7 @@
 # Real-World Reinforcement Learning (RWRL) Challenge Framework
 
 <p align="center">
-  <img src="docs/img/angular_velocity.gif" height="175px"/><img src="docs/img/humanoid_perturbations.gif" height="175px">
+  <img src="docs/img/angular_velocity.gif" height="150px"/><img src="docs/img/humanoid_perturbations.gif" height="150px">
 </p>
 
 The ["Challenges of Real-World RL"](https://arxiv.org/abs/1904.12901) paper
